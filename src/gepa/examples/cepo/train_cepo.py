@@ -14,7 +14,7 @@ from gepa.adapters.cepo_adapter.coding_utils import taco_data_converter
 
 
 def init_dataset():
-    train_split, test_split = [], []
+    train_split = []
     coding_dataset = load_dataset("Skywork/Skywork-OR1-RL-Data", split="code")
     training_sources = [
         # "train-code-leetcode-Hard", # 527 examples
@@ -49,7 +49,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--budget", type=int, default=50, help="The budget for the optimization process."
+        "--budget", type=int, default=20, help="The budget for the optimization process."
     )
     parser.add_argument(
         "--reflection_model_name", type=str, default="openai/gpt-oss-20b", help="The name of the reflection LM to use."
@@ -71,8 +71,8 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
     trainset, valset = init_dataset()
-    trainset = random.sample(trainset, k=50) # Limit to 50 samples for demo purposes
-    valset   = random.sample(valset, k=50)  # Limit to 50 samples for demo purposes
+    trainset = random.sample(trainset, k=10) # Limit to 50 samples for demo purposes
+    valset   = random.sample(valset, k=10)  # Limit to 50 samples for demo purposes
 
     print(f"Train set size: {len(trainset)}")
     print(f"Validation set size: {len(valset)}")
@@ -89,7 +89,7 @@ if __name__ == "__main__":
         response, finish_reason, _ = llm_call_reason_effort_fallback(
                 messages=[{"role": "user", "content": prompt}],
                 client=client,
-                model=args.reflection_lm,
+                model=args.reflection_model_name,
                 max_tokens=None,
                 temperature=1.0,
                 top_p=1.0,

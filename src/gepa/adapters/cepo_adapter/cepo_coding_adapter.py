@@ -1,9 +1,10 @@
 import logging
 import random
-from typing import Any, TypedDict
+from typing import Any, TypedDict, Optional, Tuple
 from pydantic import BaseModel, Field
 from openai import OpenAI
 from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from gepa.core.adapter import EvaluationBatch, GEPAAdapter
 from gepa.adapters.cepo_adapter.cepo_utils import CepoSimpleConfig, cepo_simple
 from gepa.adapters.cepo_adapter.coding_utils import calculate_score, extract_code
@@ -91,51 +92,94 @@ class CepoCodingAdapter(GEPAAdapter[CepoCodingDataInst, CepoCodingTrajectory, Ce
         batch: list[CepoCodingDataInst],
         candidate: dict[str, str],
         capture_traces: bool = False,
+        max_workers: int = 5,                # tweak based on your server capacity 
     ) -> EvaluationBatch[CepoCodingTrajectory, CepoCodingRolloutOutput]:
-        
-        outputs: list[CepoCodingRolloutOutput] = []
-        scores: list[float] = []
-        trajectories: list[CepoCodingTrajectory] | None = [] if capture_traces else None
-        
+
+
+        capture_traces = True # force this flag to true to capture feedbacks
         if not candidate:
             raise ValueError("Candidate must contain at least one component text.")
 
-        for data in tqdm(batch, desc="Evaluation..."):
-            # Step 1: use cepo simple (bon = 1, planning_n=2) to get a step 4 solution
+        n = len(batch)
+        results_outputs: list[Optional[CepoCodingRolloutOutput]] = [None] * n
+        results_scores: list[Optional[float]] = [None] * n
+        results_trajs: list[Optional[CepoCodingTrajectory]] = [None] * n if capture_traces else []
+
+        # ---- worker ----
+        def _eval_one(idx: int, data: CepoCodingDataInst
+                    ) -> Tuple[int, CepoCodingRolloutOutput, float, Optional[CepoCodingTrajectory]]:
+            # 1) run CePO
             final_output, plans, executions = cepo_simple(
                 system_prompt="",
                 planning_prompt=candidate["cepo_planning_prompt"],
                 execution_prompt=global_candidate["cepo_execution_prompt"],
                 reflection_prompt=global_candidate["cepo_reflection_prompt"],
                 question=data["question"],
-                client=self.client,
+                client=self.client,      # if this isn’t thread-safe for you, create a new client here
                 model=self.model,
                 cepo_config=self.cepo_config,
-
             )
 
-            outputs.append(
-                {"full_assistant_response": final_output}
-            )
-
-            # Step 2: Check correctness and only build trajectory on success rate
+            # 2) score
             extracted_code = extract_code(final_output)
-
-            success_rate, debug_results = calculate_score(extracted_code, 
-                                    data["test_inputs"],
-                                    data["test_outputs"],
-                                    data["fn_name"])
-            scores.append(success_rate)
-
-
-            # TODO: Might need to add more
-            if capture_traces:
-                trajectories.append(
-                    {"data": data, 
-                     "full_assistant_response": final_output,
-                     "debug_results": debug_results,
-                    }
+            success_rate, debug_results = calculate_score(
+                extracted_code,
+                data["test_inputs"],
+                data["test_outputs"],
+                data["fn_name"],
             )
+
+            # 3) package
+            out: CepoCodingRolloutOutput = {"full_assistant_response": final_output}
+            traj: Optional[CepoCodingTrajectory] = None
+            if capture_traces:
+                traj = {
+                    "data": data,
+                    "full_assistant_response": final_output,
+                    "debug_results": debug_results,
+                }
+
+            return idx, out, success_rate, traj
+
+        # ---- submit & collect ----
+        futures = []
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            for idx, data in enumerate(batch):
+                futures.append(ex.submit(_eval_one, idx, data))
+
+            for f in tqdm(as_completed(futures), total=len(futures), desc="Evaluation (parallel)..."):
+                try:
+                    idx, out, score, traj = f.result()
+                except Exception as e:
+                    # robust failure handling
+                    idx = futures.index(f)  # rare, but ensures an index if the worker raised before returning
+                    out = {"full_assistant_response": ""}  # or keep None and filter later
+                    score = float(self.failure_score)
+                    traj = None
+                    # optional: log the exception
+                    self.log.exception("Worker failed for idx=%s: %s", idx, e)
+
+                results_outputs[idx] = out
+                results_scores[idx] = score
+                if capture_traces:
+                    results_trajs[idx] = traj
+
+        # ---- finalize (type checks & fill) ----
+        # Replace any None (shouldn’t happen except catastrophic cases)
+        outputs: list[CepoCodingRolloutOutput] = [
+            o if o is not None else {"full_assistant_response": ""}  # safe default
+            for o in results_outputs
+        ]
+        scores: list[float] = [
+            float(s) if s is not None else float(self.failure_score)
+            for s in results_scores
+        ]
+        trajectories = None
+        if capture_traces:
+            # keep None entries out to match your original typing; or leave as-is if you prefer aligned length
+            trajectories = [
+                t for t in results_trajs if t is not None
+            ]
 
         return EvaluationBatch(outputs=outputs, scores=scores, trajectories=trajectories)
 

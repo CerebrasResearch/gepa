@@ -18,7 +18,7 @@ from enum import Enum
 import signal
 import json, os
 import numpy as np
-from typing import Dict
+import traceback
 
 TIMEOUT = 10  # seconds
 EXECUTION_RESULTS = {1: "passed", 0: "false", -1: "timeout", -2: "runtime_error", -3: "returncode:{code}", -4: "compile_error"}
@@ -161,139 +161,12 @@ def synthesize_std_code(raw_code, debug=False, verbose=False):
     
     return sol, sol2
 
-def execute_cb_code(method, inputs_list, outputs_list, timeout, early_stop=False, debug=False, verbose=False):
-    # Disable functionalities that can make destructive changes to the test.
-    reliability_guard()
-    results = []
-    debug_infos = {}
-    for index, inputs in enumerate(inputs_list):
-        if debug:
-            debug_infos[index] = {}
-        signal.alarm(timeout) 
-        faulthandler.enable()
-        outputs = outputs_list[index]
-        try:
-            exec_outputs = method(*inputs)
-        except Exception as e:
-            signal.alarm(0)
-            faulthandler.disable()
-            if debug:
-                _debug_print(verbose, f"Standard input runtime error = {e}")
-            results.append((False, EXECUTION_RESULTS[-2]))
-            continue
-        try:
-            # ground truth sequences are not tuples
-            if isinstance(exec_outputs, tuple):
-                exec_outputs = list(exec_outputs)
-            
-            tmp_result = exec_outputs == outputs
-            if isinstance(outputs, list) and outputs:
-                tmp_result = tmp_result or (exec_outputs == outputs[0])
-
-            # ground truth sequences are not tuples
-            try:
-                if isinstance(exec_outputs[0], tuple):
-                    exec_outputs = [list(x) for x in exec_outputs]
-                    tmp_result = tmp_result or (exec_outputs == outputs[0])
-            except:
-                True
-            if tmp_result:
-                results.append((True, EXECUTION_RESULTS[1]))
-            else:
-                results.append((False, EXECUTION_RESULTS[0]))
-            
-            # reset the alarm
-            signal.alarm(0)
-        except Exception as e:
-            signal.alarm(0)
-            faulthandler.disable()
-            if debug:
-                _debug_print(verbose, f"Standard input time limit exceeded error = {e}")
-            results.append((False, EXECUTION_RESULTS[-1]))
-            continue
-        faulthandler.disable()
-        signal.alarm(0)
-        if debug:
-            _debug_print(verbose, f"outputs = {exec_outputs}, test outputs = {outputs}, inputs = {inputs}, {type(inputs)}, {exec_outputs == [outputs]}")
-            debug_infos[index] = {
-                    'inputs': inputs,
-                    'ground_truth_outputs': outputs,
-                    'exec_outputs': exec_outputs
-                }
-    return results, debug_infos
-
+ 
 def remove_tmp_files():
     tmp_files = ['input.txt', 'output.txt']
     for tmp_file in tmp_files:
         if tmp_file in os.listdir('.'):
             os.remove(tmp_file)
-
-def execute_std_code(synthesized_code, inputs_list, outputs_list, timeout, early_stop=False, debug=False, verbose=False):
-    temp_program_path = create_temp_file(synthesized_code)
-    if debug:
-        _debug_print(verbose, "Test program:", temp_program_path)
-    assert isinstance(inputs_list, list) and isinstance(outputs_list, list)
-    assert len(inputs_list) == len(outputs_list)
-    exec_results = {}
-    if debug:
-        exec_results['debug'] = {}
-    for i, inputs in enumerate(inputs_list):
-        remove_tmp_files()
-        outputs = outputs_list[i]
-        if isinstance(inputs, list):
-            inputs = "\n".join(inputs)
-        if isinstance(outputs, list):
-            outputs = "\n".join(outputs)
-        try:
-            result = subprocess.run(['python', temp_program_path], input=inputs, text=True, capture_output=True, timeout=timeout)  
-            exec_code = 999
-        except subprocess.TimeoutExpired:
-            exec_code = -1
-        except Exception as e:
-            _debug_print(verbose, e)
-            exec_code = -2
-
-        
-        if exec_code > 0:
-            if result.returncode != 0:
-                try:
-                    inputs_tmp_file = open(create_temp_file(inputs), 'r')
-                    result = subprocess.run(['python', temp_program_path], stdin=inputs_tmp_file, text=True, capture_output=True, timeout=timeout)
-                    assert result.returncode == 0
-                    if compare_std_results(result.stdout, outputs, debug, verbose):
-                        exec_code = 1
-                    else:
-                        exec_code = 0
-                except:
-                    try:
-                        inputs_tmp_file = 'input.txt'
-                        with open(inputs_tmp_file, 'w') as ftemp:
-                            ftemp.write(inputs)
-                        result = subprocess.run(['python', temp_program_path], text=True, timeout=timeout)
-                        assert result.returncode == 0
-                        if compare_std_results(open('output.txt').read(), outputs, debug, verbose):
-                            exec_code = 1
-                        else:
-                            exec_code = 0
-                        
-                    except:
-                        exec_code = -3
-            elif compare_std_results(result.stdout, outputs, debug, verbose):
-                exec_code = 1
-            else:
-                exec_code = 0
-        exec_results[i] = (exec_code==1, EXECUTION_RESULTS[exec_code] if exec_code>-3 else EXECUTION_RESULTS[exec_code].format(code=result.returncode))
-        if exec_code >= 0:
-            if debug:
-                print_debug_info(inputs=inputs, outputs=outputs, exec_outputs=result.stdout)
-                exec_results['debug'][i] = {
-                    'inputs': inputs,
-                    'ground_truth_outputs': outputs,
-                    'exec_outputs': result.stdout
-                }
-        if early_stop and exec_code<=0:
-            break
-    return exec_results
 
 def print_debug_info(inputs, outputs, exec_outputs, verbose=False):
     nl = "\n"
@@ -530,6 +403,162 @@ def _resolve_code_type(fn_name: str | None) -> CODE_TYPE:
     return CODE_TYPE.call_based if fn_name else CODE_TYPE.standard_input
 
 
+# --- NEW: capture per-test tracebacks for call-based code
+def execute_cb_code(method, inputs_list, outputs_list, timeout, early_stop=False, debug=False, verbose=False):
+    # Disable functionalities that can make destructive changes to the test.
+    reliability_guard()
+    results = []
+    debug_infos = {}
+    for index, inputs in enumerate(inputs_list):
+        if debug:
+            debug_infos[index] = {}
+        signal.alarm(timeout)
+        faulthandler.enable()
+        outputs = outputs_list[index]
+        try:
+            exec_outputs = method(*inputs)
+            # ground truth sequences are not tuples
+            if isinstance(exec_outputs, tuple):
+                exec_outputs = list(exec_outputs)
+
+            tmp_result = exec_outputs == outputs
+            if isinstance(outputs, list) and outputs:
+                tmp_result = tmp_result or (exec_outputs == outputs[0])
+
+            try:
+                if isinstance(exec_outputs[0], tuple):
+                    exec_outputs = [list(x) for x in exec_outputs]
+                    tmp_result = tmp_result or (exec_outputs == outputs[0])
+            except Exception:
+                pass
+
+            results.append((True, EXECUTION_RESULTS[1]) if tmp_result else (False, EXECUTION_RESULTS[0]))
+            # record outputs in debug info
+            if debug:
+                debug_infos[index] = {
+                    "inputs": inputs,
+                    "ground_truth_outputs": outputs,
+                    "exec_outputs": exec_outputs,  # <- success path keeps real outputs
+                }
+        except Exception:
+            # capture full traceback on runtime error
+            tb = traceback.format_exc()
+            results.append((False, EXECUTION_RESULTS[-2]))
+            if debug:
+                _debug_print(verbose, f"Runtime error traceback:\n{tb}")
+                debug_infos[index] = {
+                    "inputs": inputs,
+                    "ground_truth_outputs": outputs,
+                    "exec_outputs": tb,  # <- error path stores traceback string
+                }
+        finally:
+            faulthandler.disable()
+            signal.alarm(0)
+
+        if early_stop and not results[-1][0]:
+            break
+
+    return results, debug_infos
+
+
+# --- NEW: always attach stderr/trace text to debug info for std-IO code
+def execute_std_code(synthesized_code, inputs_list, outputs_list, timeout, early_stop=False, debug=False, verbose=False):
+    temp_program_path = create_temp_file(synthesized_code)
+    if debug:
+        _debug_print(verbose, "Test program:", temp_program_path)
+    assert isinstance(inputs_list, list) and isinstance(outputs_list, list)
+    assert len(inputs_list) == len(outputs_list)
+
+    exec_results = {}
+    if debug:
+        exec_results["debug"] = {}
+
+    for i, inputs in enumerate(inputs_list):
+        remove_tmp_files()
+        outputs = outputs_list[i]
+        if isinstance(inputs, list):
+            inputs = "\n".join(inputs)
+        if isinstance(outputs, list):
+            outputs = "\n".join(outputs)
+
+        result = None
+        exec_code = 999
+        stderr_text = ""
+        stdout_text = ""
+
+        try:
+            result = subprocess.run(
+                ["python", temp_program_path],
+                input=inputs,
+                text=True,
+                capture_output=True,
+                timeout=timeout,
+            )
+            stdout_text = result.stdout or ""
+            stderr_text = result.stderr or ""
+            exec_code = 1 if result.returncode == 0 and compare_std_results(stdout_text, outputs, debug, verbose) else 0
+
+            if result.returncode != 0 and exec_code == 0:
+                # Try stdin redirection fallback (original logic), but keep stderr if still failing
+                try:
+                    inputs_tmp_file = open(create_temp_file(inputs), "r")
+                    result = subprocess.run(
+                        ["python", temp_program_path],
+                        stdin=inputs_tmp_file,
+                        text=True,
+                        capture_output=True,
+                        timeout=timeout,
+                    )
+                    stdout_text = result.stdout or ""
+                    stderr_text = result.stderr or ""
+                    exec_code = 1 if result.returncode == 0 and compare_std_results(stdout_text, outputs, debug, verbose) else 0
+                except Exception:
+                    # Try input.txt/output.txt fallback
+                    try:
+                        with open("input.txt", "w") as ftemp:
+                            ftemp.write(inputs)
+                        result = subprocess.run(["python", temp_program_path], text=True, capture_output=True, timeout=timeout)
+                        stdout_text = result.stdout or ""
+                        stderr_text = result.stderr or ""
+                        if result.returncode == 0 and compare_std_results(open("output.txt").read(), outputs, debug, verbose):
+                            exec_code = 1
+                        else:
+                            exec_code = 0
+                    except Exception as e:
+                        stderr_text = f"{stderr_text}\nLauncher exception:\n{traceback.format_exc()}"
+                        exec_code = -3
+
+        except subprocess.TimeoutExpired:
+            exec_code = -1
+            stderr_text = "TimeoutExpired: child process exceeded time limit"
+        except Exception:
+            exec_code = -2
+            stderr_text = f"Launcher exception:\n{traceback.format_exc()}"
+
+        # set final tuple and debug info
+        exec_results[i] = (
+            exec_code == 1,
+            EXECUTION_RESULTS[exec_code] if exec_code > -3 else EXECUTION_RESULTS[exec_code].format(code=(result.returncode if result else "N/A")),
+        )
+
+        if debug:
+            # If success, predicted_output should be stdout;
+            # If failure/traceback, predicted_output should show stderr (traceback).
+            predicted_text = stdout_text if exec_code == 1 else (stderr_text or stdout_text)
+            print_debug_info(inputs=inputs, outputs=outputs, exec_outputs=predicted_text)
+            exec_results["debug"][i] = {
+                "inputs": inputs,
+                "ground_truth_outputs": outputs,
+                "exec_outputs": predicted_text,  # <- success = stdout; failure = stderr/traceback
+            }
+
+        if early_stop and exec_code <= 0:
+            break
+
+    return exec_results
+
+
+# --- UPDATED: collect compile-time traceback when compilation fails
 def run_test(
     code_generation: str,
     test_inputs: list,
@@ -537,80 +566,79 @@ def run_test(
     fn_name: str | None,
     timeout: int = TIMEOUT,
     *,
-    debug: bool = True,    # keep debug logic ON by default
-    verbose: bool = False, # silence prints by default
+    debug: bool = True,
+    verbose: bool = False,
 ):
-    """
-    Execute tests for a code_generation string against parallel lists of inputs/outputs.
-
-    Returns: list of dicts, one per test:
-      {"test_input": <normalized_input>, "predicted_output": <pred>, "ground_truth_output": <normalized_gt>, "status": <str>}
-
-    Notes:
-    - Runs with debug logic enabled by default to capture exec outputs in the returned structures.
-    - Console printing is controlled by `verbose`.
-    - If we cannot obtain a concrete program output (e.g., compile error), predicted_output is None.
-    - 'status' is whatever the executors report (e.g., "passed", "false", "timeout", "runtime_error", "returncode:1").
-    """
     assert isinstance(test_inputs, list) and isinstance(test_outputs, list)
     assert len(test_inputs) == len(test_outputs)
 
     which_type = _resolve_code_type(fn_name)
     method_name = fn_name if which_type == CODE_TYPE.call_based else None
 
-    # Normalize once for consistent comparison and output
+    # Normalize
     inputs_list, outputs_list = [], []
     for inp, outp in zip(test_inputs, test_outputs):
         inp_norm, outp_norm = process_input_output(inp, outp)
         inputs_list.append(inp_norm)
         outputs_list.append(outp_norm)
 
-    # --- Execute and collect detail + debug traces (always debug=True) ---
+    debug_infos = {}
+    detail_results = {}
+
     if which_type == CODE_TYPE.call_based:
         synthesized_code = synthesize_cb_code(code_generation, debug, verbose)
         method_func = compile_and_get_func(
             synthesized_code, which_type, method_name, timeout=timeout, debug=debug, verbose=verbose
         )
         if not method_func:
-            # compilation/symbol load failed
+            # Re-attempt compilation JUST to capture traceback text for users
+            compile_tb = ""
+            try:
+                module_from_string("tmp_sol_for_tb", synthesized_code)
+            except Exception:
+                compile_tb = traceback.format_exc()
+
+            # return per-test records with the compile traceback as predicted_output
             return [
-                {"test_input": inputs_list[i], "predicted_output": None, "ground_truth_output": outputs_list[i], "status": "compile_error"}
+                {
+                    "test_input": inputs_list[i],
+                    "predicted_output": (compile_tb or "compile_error"),
+                    "ground_truth_output": outputs_list[i],
+                    "status": "compile_error",
+                }
                 for i in range(len(inputs_list))
             ]
 
-        detail_results, debug_infos = execute_cb_code(
+        detail_results_list, debug_infos = execute_cb_code(
             method_func,
             inputs_list,
             outputs_list,
             timeout=timeout,
             early_stop=False,
-            debug=debug,   # ensures exec_outputs captured per test
+            debug=debug,
             verbose=verbose,
         )
-
-        # Convert list → dict if needed for uniform access
-        if isinstance(detail_results, list):
-            if len(detail_results) == 1:
-                detail_results = detail_results * len(inputs_list)
-            detail_results = dict(zip(range(len(inputs_list)), detail_results))
+        # list -> dict for uniform access
+        if isinstance(detail_results_list, list):
+            detail_results = dict(zip(range(len(inputs_list)), detail_results_list))
+        else:
+            detail_results = detail_results_list
 
     else:
-        # Standard I/O: build two variants and try the direct exec script first
-        synthesized_code, exec_code = synthesize_std_code(code_generation, True, debug, verbose)
-
+        synthesized_code, exec_code = synthesize_std_code(code_generation, debug, verbose)
         exec_results = execute_std_code(
             exec_code,
             inputs_list,
             outputs_list,
             timeout=timeout,
             early_stop=False,
-            debug=debug,   # ensures exec_outputs captured per test
+            debug=debug,
             verbose=verbose,
         )
         debug_infos = exec_results.get("debug", {}) or {}
         detail_results = {k: v for k, v in exec_results.items() if k != "debug"}
 
-        # If everything failed as returncode:1, try calling code() explicitly
+        # Fallback: try explicit code() call if everything was returncode:1
         if detail_results and set(detail_results.values()) == {(False, "returncode:1")}:
             exec_results2 = execute_std_code(
                 synthesized_code + "\ncode()\n",
@@ -624,15 +652,12 @@ def run_test(
             debug_infos = exec_results2.get("debug", {}) or {}
             detail_results = {k: v for k, v in exec_results2.items() if k != "debug"}
 
-    # --- Build requested output list ---
+    # Build output list with predicted_output coming from debug_infos
     out = []
     for idx in range(len(inputs_list)):
-        # status from detail_results; default to runtime_error if missing
         _, status = detail_results.get(idx, (False, "runtime_error"))
-        # predicted output from debug infos (may be missing if hard failure)
         trace = debug_infos.get(idx, {})
-        pred = trace.get("exec_outputs", None)
-
+        pred = trace.get("exec_outputs", None)  # now always set: success=stdout/result, failure=traceback/stderr
         out.append(
             {
                 "test_input": inputs_list[idx],
@@ -644,6 +669,8 @@ def run_test(
     return out
 
 
+import traceback  # <-- ensure this is imported at top of file
+
 def check_correctness(
     code_generation: str,
     test_inputs: list,
@@ -651,15 +678,14 @@ def check_correctness(
     fn_name: str | None,
     timeout: int = TIMEOUT,
     *,
-    debug: bool = True,    # keep logic for debug_infos, traces
-    verbose: bool = False, # printing toggle
+    debug: bool = True,
+    verbose: bool = False,
 ):
     """
     Process-level guard around run_test. Returns a list of dicts:
       {"test_input": ..., "predicted_output": ..., "ground_truth_output": ..., "status": ...}
 
-    On unexpected exceptions in the child process, or true global timeout,
-    we return records with predicted_output=None and an appropriate status.
+    On unexpected exceptions in the child process, capture a traceback string in predicted_output.
     """
     import multiprocessing
 
@@ -677,9 +703,15 @@ def check_correctness(
                 )
             )
         except Exception:
-            # Unexpected issue → no predictions available; mark as runtime_error
+            # Put the full traceback string into predicted_output instead of None
+            tb = traceback.format_exc()
             fallback = [
-                {"test_input": inp, "predicted_output": None, "ground_truth_output": out, "status": "runner_exception"}
+                {
+                    "test_input": inp,
+                    "predicted_output": tb,   # <-- full error trace captured here
+                    "ground_truth_output": out,
+                    "status": "runner_exception",
+                }
                 for inp, out in zip(test_inputs, test_outputs)
             ]
             result_list.append(fallback)
@@ -694,8 +726,14 @@ def check_correctness(
 
     if not shared_res:
         # True global timeout: subprocess never posted back
+        msg = "Global timeout: worker process exceeded the wall-clock limit."
         return [
-            {"test_input": inp, "predicted_output": None, "ground_truth_output": out, "status": "global_timeout"}
+            {
+                "test_input": inp,
+                "predicted_output": msg,   # <-- helpful message instead of None
+                "ground_truth_output": out,
+                "status": "global_timeout",
+            }
             for inp, out in zip(test_inputs, test_outputs)
         ]
 

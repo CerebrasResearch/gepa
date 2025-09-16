@@ -238,16 +238,7 @@ def llm_call_reason_effort_fallback(messages, client, model, max_tokens, tempera
     response = None
     finish_reason = "error"
     completion_tokens = 0
-    # There are two types of error to handle
-    # Case 1: the model didn't finish generation, 
-    # there will still be a response but with content to None;
-    # we just lower the reasoning effort and see
-
-    # Case 2: gpt-oss's "expected output number" error
-    # this will usually trigger a 400 http error and cannot be recovered
-    # our only option is to retry and then lower reasoning effort
-    # this seems a transient error but no solution yet (https://github.com/pydantic/pydantic-ai/issues/2449)
-    # We might need to modify vllm/gpt-oss source code for this...
+    
     for effort in reasoning_effort_levels:
         try:
             response, finish_reason, completion_tokens = llm_call(
@@ -263,7 +254,9 @@ def llm_call_reason_effort_fallback(messages, client, model, max_tokens, tempera
             if response is not None and finish_reason != "length":
                 return response, finish_reason, completion_tokens
             # print("Reasoning fallback from", effort, "to lower ones")
-        except (BadRequestError, InternalServerError) as e:
+        # except (BadRequestError, InternalServerError) as e:
+        except Exception as e:
+            print(e)
             # After 2 retries at this effort failed with 400 → degrade
             print("400/500 persisted after retries at reasoning effort", effort, "→ degrading")
             continue
