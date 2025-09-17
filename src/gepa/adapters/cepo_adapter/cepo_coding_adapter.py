@@ -1,6 +1,6 @@
 import logging
 import random
-from typing import Any, TypedDict, Optional, Tuple
+from typing import Any, TypedDict, Optional, Tuple, List
 from pydantic import BaseModel, Field
 from openai import OpenAI
 from tqdm import tqdm
@@ -92,103 +92,91 @@ class CepoCodingAdapter(GEPAAdapter[CepoCodingDataInst, CepoCodingTrajectory, Ce
         batch: list[CepoCodingDataInst],
         candidate: dict[str, str],
         capture_traces: bool = False,
-        max_workers: int = 5,                # tweak based on your server capacity 
+        max_workers: int = 16,  # parallel only for LLM calls
     ) -> EvaluationBatch[CepoCodingTrajectory, CepoCodingRolloutOutput]:
 
-
-        capture_traces = True # force this flag to true to capture feedbacks
+        capture_traces = True  # always capture for reflection
         if not candidate:
             raise ValueError("Candidate must contain at least one component text.")
 
         n = len(batch)
-        results_outputs: list[Optional[CepoCodingRolloutOutput]] = [None] * n
-        results_scores: list[Optional[float]] = [None] * n
-        results_trajs: list[Optional[CepoCodingTrajectory]] = [None] * n if capture_traces else []
 
-        # ---- worker ----
-        def _eval_one(idx: int, data: CepoCodingDataInst
-                    ) -> Tuple[int, CepoCodingRolloutOutput, float, Optional[CepoCodingTrajectory]]:
-            # 1) run CePO
+        # ---------- Phase 1: parallelize ONLY the LLM calls (cepo_simple) ----------
+        # Store just the final_output for each item (plans/executions if you need)
+        final_outputs: List[Optional[str]] = [None] * n
+
+        def _run_cepo(idx: int, data: CepoCodingDataInst) -> Tuple[int, str]:
             final_output, plans, executions = cepo_simple(
                 system_prompt="",
                 planning_prompt=candidate["cepo_planning_prompt"],
                 execution_prompt=global_candidate["cepo_execution_prompt"],
                 reflection_prompt=global_candidate["cepo_reflection_prompt"],
                 question=data["question"],
-                client=self.client,      # if this isn’t thread-safe for you, create a new client here
+                client=self.client,
                 model=self.model,
                 cepo_config=self.cepo_config,
             )
+            return idx, final_output
 
-            # 2) score
-            extracted_code = extract_code(final_output)
-            success_rate, debug_results = calculate_score(
-                extracted_code,
-                data["test_inputs"],
-                data["test_outputs"],
-                data["fn_name"],
-            )
-
-            # 3) package
-            out: CepoCodingRolloutOutput = {"full_assistant_response": final_output}
-            traj: Optional[CepoCodingTrajectory] = None
-            if capture_traces:
-                traj = {
-                    "data": data,
-                    "full_assistant_response": final_output,
-                    "debug_results": debug_results,
-                }
-
-            return idx, out, success_rate, traj
-
-        # ---- submit & collect ----
         futures = []
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            future_to_idx = {}
             for idx, data in enumerate(batch):
-                futures.append(ex.submit(_eval_one, idx, data))
+                f = ex.submit(_run_cepo, idx, data)
+                future_to_idx[f] = idx
+                futures.append(f)
 
-            for f in tqdm(as_completed(futures), total=len(futures), desc="Evaluation (parallel)..."):
+            for f in tqdm(as_completed(futures), total=len(futures), desc="CePO simple running..."):
+                idx = future_to_idx[f]
                 try:
-                    idx, out, score, traj = f.result()
+                    i, out = f.result()
+                    final_outputs[i] = out
                 except Exception as e:
-                    # robust failure handling
-                    idx = futures.index(f)  # rare, but ensures an index if the worker raised before returning
-                    out = {"full_assistant_response": ""}  # or keep None and filter later
-                    score = float(self.failure_score)
-                    traj = None
-                    # optional: log the exception
-                    self.log.exception("Worker failed for idx=%s: %s", idx, e)
+                    self.log.exception("cepo_simple failed for idx=%s: %s", idx, e)
+                    final_outputs[idx] = ""  # safe fallback to keep pipeline moving
 
-                results_outputs[idx] = out
-                results_scores[idx] = score
-                if capture_traces:
-                    results_trajs[idx] = traj
+        # ---------- Phase 2: sequential post-processing & scoring ----------
+        outputs: list[CepoCodingRolloutOutput] = []
+        scores: list[float] = []
+        trajectories: list[CepoCodingTrajectory] | None = [] if capture_traces else None
 
-        # ---- finalize (type checks & fill) ----
-        # Replace any None (shouldn’t happen except catastrophic cases)
-        outputs: list[CepoCodingRolloutOutput] = [
-            o if o is not None else {"full_assistant_response": ""}  # safe default
-            for o in results_outputs
-        ]
-        scores: list[float] = [
-            float(s) if s is not None else float(self.failure_score)
-            for s in results_scores
-        ]
-        trajectories = None
-        if capture_traces:
-            # keep None entries out to match your original typing; or leave as-is if you prefer aligned length
-            trajectories = [
-                t for t in results_trajs if t is not None
-            ]
+        for idx, data in tqdm(list(enumerate(batch)), total=n, desc="Scoring code..."):
+            final_output = final_outputs[idx] or ""
+            out: CepoCodingRolloutOutput = {"full_assistant_response": final_output}
+            outputs.append(out)
+
+            try:
+                extracted_code = extract_code(final_output)
+                success_rate, debug_results = calculate_score(
+                    extracted_code,
+                    data["test_inputs"],
+                    data["test_outputs"],
+                    data["fn_name"],
+                )
+            except Exception as e:
+                self.log.exception("Scoring failed for idx=%s: %s", idx, e)
+                success_rate, debug_results = float(self.failure_score), []
+
+            scores.append(success_rate)
+
+            if capture_traces:
+                (trajectories if trajectories is not None else []).append(
+                    {
+                        "data": data,
+                        "full_assistant_response": final_output,
+                        "debug_results": debug_results,
+                    }
+                )
 
         return EvaluationBatch(outputs=outputs, scores=scores, trajectories=trajectories)
+
 
     def make_reflective_dataset(
         self,
         candidate: dict[str, str],
         eval_batch: EvaluationBatch[CepoCodingTrajectory, CepoCodingRolloutOutput],
         components_to_update: list[str],
-        max_cases: int = 15,
+        max_cases: int = 5,
     ) -> dict[str, list[dict[str, Any]]]:
         # TODO: Figure out what is this component name and why we have such assert
         assert len(components_to_update) == 1
@@ -209,7 +197,7 @@ class CepoCodingAdapter(GEPAAdapter[CepoCodingDataInst, CepoCodingTrajectory, Ce
             
             # TODO: add reasonable threashold for code passing rate
             if score == 1.0:
-                feedback = f"The generated code is correct and it passed all test cases."
+                feedback = f"The plan led to correct code which passed all test cases."
             else:
                 failed = [r for r in (debug_results or []) if r.get("status") != "passed"]
                 if len(failed) > max_cases:
@@ -217,23 +205,22 @@ class CepoCodingAdapter(GEPAAdapter[CepoCodingDataInst, CepoCodingTrajectory, Ce
                 lines = []
                 for i, r in enumerate(failed, 1):
                     lines.append(
-                        f"- Case {i} | status={r.get('status')}\n"
-                        f"  input: {r.get('test_input')}\n"
-                        f"  expected: {r.get('gt_output')}\n"
-                        f"  predicted: {r.get('pred_output')}"
+                        f"- Test Case {i} | status={r.get('status')}\n"
+                        f"  Test input: {r.get('test_input')}\n"
+                        f"  Expected Test output: {r.get('gt_output')}\n"
+                        f"  Predicted Test output using our plan: {r.get('pred_output')}"
                     )
                 feedback = (
-                    "The generated code is incorrect.\n"
-                    "Here are failing test cases:\n"
+                    "The plan failed to yield correct code.\n"
+                    "Here are the failed test cases as a reference:\n"
                     + "\n".join(lines)
-                    + "\n\nPlease analyze why these failures occur and propose a minimal fix."
                 )
 
 
             items.append(
                 {
                     "Inputs": data["question"],
-                    "Generated Outputs": generated_outputs,
+                    "Generated Code": extract_code(generated_outputs),
                     "Feedback": feedback,
                 }
             )

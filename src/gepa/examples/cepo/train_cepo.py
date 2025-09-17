@@ -49,7 +49,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--budget", type=int, default=20, help="The budget for the optimization process."
+        "--budget", type=int, default=400, help="The budget for the optimization process."
     )
     parser.add_argument(
         "--reflection_model_name", type=str, default="openai/gpt-oss-20b", help="The name of the reflection LM to use."
@@ -64,15 +64,15 @@ if __name__ == "__main__":
         "--reflection_api_base", type=str, default="http://localhost:7190/v1"
     )
     parser.add_argument(
-        "--reflection_minibatch_size", type=int, default=3, help="The size of the minibatch for the reflection LM."
+        "--reflection_minibatch_size", type=int, default=10, help="The size of the minibatch for the reflection LM."
     )
     parser.add_argument(
         "--seed", type=int, default=0, help="The seed for the random number generator for reproducibility."
     )
     args = parser.parse_args()
     trainset, valset = init_dataset()
-    trainset = random.sample(trainset, k=10) # Limit to 50 samples for demo purposes
-    valset   = random.sample(valset, k=10)  # Limit to 50 samples for demo purposes
+    trainset = random.sample(trainset, k=200) # Limit to 50 samples for demo purposes
+    valset   = random.sample(valset, k=50)  # Limit to 50 samples for demo purposes
 
     print(f"Train set size: {len(trainset)}")
     print(f"Validation set size: {len(valset)}")

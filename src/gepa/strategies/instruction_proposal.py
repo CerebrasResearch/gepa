@@ -6,23 +6,43 @@ from gepa.proposer.reflective_mutation.base import Signature
 
 
 class InstructionProposalSignature(Signature):
-    prompt_template = """I provided an assistant with the following instructions to perform a task for me:
+#     prompt_template = """I provided an assistant with the following instructions to perform a task for me:
+# ```
+# <curr_instructions>
+# ```
+
+# The following are examples of different task inputs provided to the assistant along with the assistant's response for each of them, and some feedback on how the assistant's response could be better:
+# ```
+# <inputs_outputs_feedback>
+# ```
+
+# Your task is to write a new instruction for the assistant.
+
+# Read the inputs carefully and identify the input format and infer detailed task description about the task I wish to solve with the assistant.
+
+# Read all the assistant responses and the corresponding feedback. Identify all niche and domain specific factual information about the task and include it in the instruction, as a lot of it may not be available to the assistant in the future. The assistant may have utilized a generalizable strategy to solve the task, if so, include that in the instruction as well.
+
+# Provide the new instructions within ``` blocks."""
+
+    prompt_template = """I provided an assistant with the following PLANNING instruction:
 ```
 <curr_instructions>
 ```
 
-The following are examples of different task inputs provided to the assistant along with the assistant's response for each of them, and some feedback on how the assistant's response could be better:
+The following are examples of different task inputs, the assistant’s responses, and feedback on how the PLANNING could be improved:
 ```
 <inputs_outputs_feedback>
 ```
 
-Your task is to write a new instruction for the assistant.
+Your task is to propose a revised PLANNING instruction for the assistant.
 
-Read the inputs carefully and identify the input format and infer detailed task description about the task I wish to solve with the assistant.
+Guidelines:
+- Focus ONLY on improving the *structure and clarity of planning* (e.g., require decomposition into steps, explicit input/output contracts, consideration of boundary cases, and a self-check).
+- DO NOT include any dataset-specific content, numeric constraints, input/output formats, examples, or code.
+- Keep the instruction general so it can apply to many tasks.
+- The revision should be concise, clear, and in natural language.
 
-Read all the assistant responses and the corresponding feedback. Identify all niche and domain specific factual information about the task and include it in the instruction, as a lot of it may not be available to the assistant in the future. The assistant may have utilized a generalizable strategy to solve the task, if so, include that in the instruction as well.
-
-Provide the new instructions within ``` blocks."""
+Return only the new instruction inside ``` blocks."""
 
     input_keys = ["current_instruction_doc", "dataset_with_feedback"]
     output_keys = ["new_instruction"]
