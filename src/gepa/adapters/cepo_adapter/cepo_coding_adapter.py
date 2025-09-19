@@ -95,7 +95,6 @@ class CepoCodingAdapter(GEPAAdapter[CepoCodingDataInst, CepoCodingTrajectory, Ce
         max_workers: int = 16,  # parallel only for LLM calls
     ) -> EvaluationBatch[CepoCodingTrajectory, CepoCodingRolloutOutput]:
 
-        capture_traces = True  # always capture for reflection
         if not candidate:
             raise ValueError("Candidate must contain at least one component text.")
 
