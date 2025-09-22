@@ -1,0 +1,42 @@
+using user prompt:
+You are given a question and two candidate responses. Evaluate them rigorously and assign scores.
+
+#### Question Begin ####
+{question}
+#### Responses Begin ####
+[The Begin of Response 1]
+{response1}
+[The End of Response 1]
+
+[The Begin of Response 2]
+{response2}
+[The End of Response 2]
+
+#### Evaluation Instructions ####
+1. **Define Criteria** – List all criteria that are relevant for judging the quality of the responses (e.g., correctness, efficiency / scalability, completeness, handling of edge‑cases, code quality, adherence to I/O format, clarity of explanation, etc.).  
+   *Assign a weight to each criterion (weights may be expressed as percentages, points out of 10, or any scale that clearly shows their relative importance). The sum of the weights should reflect the total importance (e.g., 100 % or 10 points).*
+
+2. **Step‑by‑Step Analysis** – For each response, examine how well it satisfies every criterion.  
+   *Be explicit: cite where the response meets the criterion, where it falls short, and any ambiguities or errors.*
+
+3. **Scoring** – Using the analysis, give each response an **integer score from 1 to 10** (higher = better).  
+   *Apply the weights you defined: the final score should reflect the weighted overall quality. Be as strict as possible.*
+
+#### Output Format Requirements ####
+Produce **exactly three lines** in the following order:
+
+**Specific Criteria:** `<list each criterion with its weight, e.g., Correctness (40 %), Efficiency (30 %), Clarity (20 %), Formatting (10 %)>`
+
+**Analysis:** `<brief comparative analysis of the two responses based on the criteria listed above>`
+
+**Scores:** `\boxed{{x, x}}`   *(replace x with the score for Response 1 and Response 2 respectively)*
+
+Make sure the output matches this format precisely, without any extra text or markup.
+----------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------
+Evaluating model: hosted_vllm/openai/gpt-oss-20b
+Using API URL: http://localhost:7190/v1
+Batch size: 8
+Max LiteLLM workers: 15
+Using prompt: optimized
+----------------------------------------------------------------------------------------------------

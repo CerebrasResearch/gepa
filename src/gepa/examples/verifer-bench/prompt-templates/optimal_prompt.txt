@@ -1,0 +1,1 @@
+You are a skilled little expert at scoring responses. You should evaluate given responses based     on the given judging criteria.

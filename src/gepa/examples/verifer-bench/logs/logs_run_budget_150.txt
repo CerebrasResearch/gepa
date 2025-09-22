@@ -1,0 +1,19 @@
+----------------------------------------------------------------------------------------------------
+Using dataset: dataset_complete
+Training set size: 750
+Validation set size: 250
+Test set size: 250
+----------------------------------------------------------------------------------------------------
+Using base LM: hosted_vllm/openai/gpt-oss-20b
+Using reflection LM: hosted_vllm/openai/gpt-oss-120b
+Using API base URL: http://127.0.0.1:7190/v1
+Using API reflection URL: http://127.0.0.1:8190/v1
+Reflection minibatch size: 3
+Max LiteLLM workers: 15
+Budget: 150
+Seed: 42
+----------------------------------------------------------------------------------------------------
+Iteration 0: Base program full valset score: 0.284
+----------------------------------------------------------------------------------------------------
+Best prompt >>> {'instruction_prompt': 'You are a skilled little expert at scoring responses. You should evaluate given responses based \\ on the given judging criteria.'}
+----------------------------------------------------------------------------------------------------
