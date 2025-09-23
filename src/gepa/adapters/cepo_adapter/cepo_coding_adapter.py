@@ -98,6 +98,12 @@ class CepoCodingAdapter(GEPAAdapter[CepoCodingDataInst, CepoCodingTrajectory, Ce
         if not candidate:
             raise ValueError("Candidate must contain at least one component text.")
 
+        # Ensure all required prompts are in candidate
+        required_prompts = ["cepo_planning_prompt", "cepo_execution_prompt", "cepo_reflection_prompt"]
+        for prompt in required_prompts:
+            if prompt not in candidate:
+                raise ValueError(f"Candidate must contain '{prompt}'")
+
         n = len(batch)
 
         # ---------- Phase 1: parallelize ONLY the LLM calls (cepo_simple) ----------
@@ -108,8 +114,8 @@ class CepoCodingAdapter(GEPAAdapter[CepoCodingDataInst, CepoCodingTrajectory, Ce
             final_output, plans, executions = cepo_simple(
                 system_prompt="",
                 planning_prompt=candidate["cepo_planning_prompt"],
-                execution_prompt=global_candidate["cepo_execution_prompt"],
-                reflection_prompt=global_candidate["cepo_reflection_prompt"],
+                execution_prompt=candidate["cepo_execution_prompt"],
+                reflection_prompt=candidate["cepo_reflection_prompt"],
                 question=data["question"],
                 client=self.client,
                 model=self.model,
