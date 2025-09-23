@@ -87,7 +87,7 @@ if __name__ == "__main__":
         "--budget", type=int, default=400, help="The budget for the optimization process."
     )
     parser.add_argument(
-        "--reflection_model_name", type=str, default="openai/gpt-oss-20b", help="The name of the reflection LM to use."
+        "--reflection_model_name", type=str, default="openai/gpt-oss-120b", help="The name of the reflection LM to use."
     )
     parser.add_argument(
         "--adapter_model_name", type=str, default="openai/gpt-oss-20b", help="The name of the adapter LM to use."
@@ -96,7 +96,7 @@ if __name__ == "__main__":
         "--adapter_api_base", type=str, default="http://localhost:7190/v1"
     )
     parser.add_argument(
-        "--reflection_api_base", type=str, default="http://localhost:7190/v1"
+        "--reflection_api_base", type=str, default="http://localhost:8190/v1"
     )
     parser.add_argument(
         "--reflection_minibatch_size", type=int, default=10, help="The size of the minibatch for the reflection LM."
@@ -174,7 +174,7 @@ if __name__ == "__main__":
     # Test set eval
     print("Final Evaluation on test set for the best trained prompt...")
     best_index = np.argmax(optimized_results_dict["val_aggregate_scores"])
-    candidate["cepo_planning_prompt"] = optimized_results_dict["candidates"][best_index]
+    candidate["cepo_planning_prompt"] = optimized_results_dict["candidates"][best_index]["cepo_planning_prompt"]
     test_results = cepo_adapter.evaluate(
         batch=testset,
         candidate=candidate
