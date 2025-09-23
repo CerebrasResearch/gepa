@@ -24,28 +24,35 @@ class InstructionProposalSignature(Signature):
 
 # Provide the new instructions within ``` blocks."""
 
-    prompt_template = """I provided an assistant with the following PLANNING instruction:
+    prompt_template = """I provided an assistant with the following {PROMPT_TYPE} instruction:
 ```
 <curr_instructions>
 ```
 
-The following are examples of different task inputs, the assistant’s responses, and feedback on how the PLANNING could be improved:
+The following are examples of different task inputs, the assistant’s responses, and feedback on how the {PROMPT_TYPE} could be improved:
 ```
 <inputs_outputs_feedback>
 ```
 
-Your task is to propose a revised PLANNING instruction for the assistant.
+Your task is to propose a revised {PROMPT_TYPE} instruction for the assistant.
 
-Guidelines:
-- Focus ONLY on improving the *structure and clarity of planning* (e.g., require decomposition into steps, explicit input/output contracts, consideration of boundary cases, and a self-check).
-- DO NOT include any dataset-specific content, numeric constraints, input/output formats, examples, or code.
-- Keep the instruction general so it can apply to many tasks.
-- The revision should be concise, clear, and in natural language.
+Guidelines {GUIDELINES}
 
 Return only the new instruction inside ``` blocks."""
 
-    input_keys = ["current_instruction_doc", "dataset_with_feedback"]
+    input_keys = ["current_instruction_doc", "dataset_with_feedback", "prompt_type"]
     output_keys = ["new_instruction"]
+
+    @classmethod
+    def get_guidelines(cls, prompt_type):
+        guidelines = {
+            "PLANNING": "- Focus ONLY on improving the *structure and clarity of planning* (e.g., require decomposition into steps, explicit input/output contracts, consideration of boundary cases, and a self-check).\n- DO NOT include any dataset-specific content, numeric constraints, input/output formats, examples, or code.\n- Keep the instruction general so it can apply to many tasks.\n- The revision should be concise, clear, and in natural language.",
+            
+            "EXECUTION": "- Focus ONLY on improving how the assistant should *execute a plan* (e.g., methodical implementation, validation of intermediate steps, error checking).\n- Emphasize careful execution especially for steps where confidence is lower.\n- DO NOT include any dataset-specific content, numeric constraints, input/output formats, examples, or code.\n- Keep the instruction general so it can apply to many tasks.\n- The revision should be concise, clear, and in natural language.",
+            
+            "REFLECTION": "- Focus ONLY on improving how the assistant should *reflect on and validate* their work (e.g., reviewing for inconsistencies, verifying solutions, refining approaches).\n- Emphasize careful review of the entire problem-solving process.\n- DO NOT include any dataset-specific content, numeric constraints, input/output formats, examples, or code.\n- Keep the instruction general so it can apply to many tasks.\n- The revision should be concise, clear, and in natural language."
+        }
+        return guidelines.get(prompt_type, guidelines["PLANNING"])
 
     @classmethod
     def prompt_renderer(cls, input_dict: dict[str, str]) -> str:
@@ -79,10 +86,16 @@ Return only the new instruction inside ``` blocks."""
                 return s
 
             return "\n\n".join(convert_sample_to_markdown(sample, i + 1) for i, sample in enumerate(samples))
+        
+        prompt_type = input_dict.get("prompt_type", "PLANNING").upper()
+        guidelines = cls.get_guidelines(prompt_type)
 
         prompt = cls.prompt_template
+        prompt = prompt.replace("{PROMPT_TYPE}", prompt_type)
+        prompt = prompt.replace("{GUIDELINES}", guidelines)
         prompt = prompt.replace("<curr_instructions>", input_dict["current_instruction_doc"])
         prompt = prompt.replace("<inputs_outputs_feedback>", format_samples(input_dict["dataset_with_feedback"]))
+        
         return prompt
 
     @classmethod

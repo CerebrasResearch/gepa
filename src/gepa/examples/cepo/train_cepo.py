@@ -152,8 +152,12 @@ if __name__ == "__main__":
     print("Initial prompt test set score", sum(initial_test_scores) / len(initial_test_scores))
 
     # Training and validation
+    candidates = {"cepo_planning_prompt": candidate["cepo_planning_prompt"],
+                "cepo_execution_prompt": candidate["cepo_execution_prompt"],
+                "cepo_reflection_prompt": candidate["cepo_reflection_prompt"]}
+
     optimized_results = optimize(
-        seed_candidate={"cepo_planning_prompt": candidate["cepo_planning_prompt"]},
+        seed_candidate=candidates,
         trainset=trainset,
         valset=valset,
         adapter=cepo_adapter,
